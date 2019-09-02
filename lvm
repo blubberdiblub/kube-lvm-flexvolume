@@ -15,6 +15,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+_debug='[]'
+
+for arg in "$@" ; do
+  _debug=$( printf -- '%s' "$_debug" | jq --arg arg "$arg" '. + [$arg]' )
+done
+
+printf -- '%s\n' "$_debug" >> /var/log/lvm-flexvolume.log
+
 # Required packages:
 #
 #  - jq
