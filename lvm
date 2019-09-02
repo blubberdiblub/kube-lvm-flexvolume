@@ -46,6 +46,32 @@ EOF
 	exit 1
 }
 
+reply() {
+  [ -n "$1" ] || { echo "missing status" >&2 ; exit 1 ; }
+
+  local status=$1 ; shift
+
+  local reply
+  reply=$( jq -nc --arg status "$status" '{"status": $status}' )
+
+  local temp
+  while [ "$#" -gt 0 ] ; do
+    [ -n "$1" ] || { echo "missing key" >&2 ; exit 1 ; }
+
+    if temp=$( printf -- '%s' "$reply" | jq -c --arg key "$1" --argjson value "$2" '. + {($key): $value}' 2> /dev/null ) ; then
+      reply=$temp
+    else
+      reply=$( printf -- '%s' "$reply" | jq -c --arg key "$1" --arg value "$2" '. + {($key): $value}' )
+    fi
+
+    shift
+    shift
+  done
+
+  printf -- '%s' "$reply" | jq . >> /var/log/lvm-flexvolume.log
+  printf -- '%s' "$reply"
+}
+
 ismounted() {
 	MOUNT=$(findmnt -n "${MNTPATH}" 2>/dev/null | cut -d' ' -f1)
 	[ "${MOUNT}" = "${MNTPATH}" ]
@@ -79,17 +105,17 @@ attach() {
 		fi
 
 		if ! $created; then
-			jq -n --arg vol "$VG/$VOLUMEID" '{"status": "Failure", "message": ("Could not attach " + $vol)}'
+                        reply Failure message "Could not attach $VG/$VOLUMEID"
 			exit 1
 		fi
 	fi
 
-	jq -n --arg dev "$DMDEV" '{"status": "Success", "device": $dev}'
+        reply Success device "$DMDEV"
 	exit 0
 }
 
 detach() {
-	jq -n '{"status": "Success"}'
+        reply Success
 	exit 0
 }
 
@@ -105,19 +131,19 @@ domountdevice() {
 	MNTOPTIONS=$(printf -- '%s' "$3" | jq -r '.mountoptions | select(type == "string")')
 
 	if [ ! -b "${DMDEV}" ]; then
-		jq -n --arg dev "$DMDEV" '{"status": "Failure", "message": ($dev + " does not exist")}'
+                reply Failure message "$DMDEV does not exist"
 		exit 1
 	fi
 
 	if ismounted ; then
-		jq -n '{"status": "Success"}'
+                reply Success
 		exit 0
 	fi
 
 	VOLFSTYPE=$(blkid -o udev "${DMDEV}" 2>/dev/null|grep "ID_FS_TYPE"|cut -d"=" -f2)
 	if [ "${VOLFSTYPE}" = "" ]; then
 		if ! mkfs -t "${FSTYPE}" "${DMDEV}" >/dev/null 2>&1 ; then
-			jq -n --arg fs "$FSTYPE" --arg dev "$DMDEV" '{"status": "Failure", "message": ("Failed to create fs " + $fs + " on device " + $dev)}'
+                        reply Failure message "Failed to create fs $FSTYPE on device $DMDEV"
 			exit 1
 		fi
 	fi
@@ -125,44 +151,44 @@ domountdevice() {
 	mkdir -p "${MNTPATH}" > /dev/null 2>&1
 
 	if ! mount ${MNTOPTIONS:+-o "$MNTOPTIONS"} "${DMDEV}" "${MNTPATH}" > /dev/null 2>&1 ; then
-		jq -n --arg dev "$DMDEV" --arg mnt "$MNTPATH" '{"status": "Failure", "message": ("Failed to mount device " + $dev + " at " + $mnt)}'
+                reply "Failure" message "Failed to mount device $DMDEV at $MNTPATH"
 		exit 1
 	fi
 
-	jq -n '{"status": "Success"}'
+        reply Success
 	exit 0
 }
 
 unmountdevice() {
 	MNTPATH=$1
 	if [ ! -d "${MNTPATH}" ]; then
-		jq -n '{"status": "Success"}'
+                reply Success
 		exit 0
 	fi
 
 	if ! ismounted ; then
-		jq -n '{"status": "Success"}'
+                reply Success
 		exit 0
 	fi
 
 	if ! umount "${MNTPATH}" > /dev/null 2>&1 ; then
-		jq -n --arg mnt "$MNTPATH" '{"status": "Failed", "message": ("Failed to unmount volume at " + $mnt)}'
+                reply Failure message "Failed to unmount volume at $MNTPATH"
 		exit 1
 	fi
 
-	jq -n '{"status": "Success"}'
+        reply Success
 	exit 0
 }
 
 isattached() {
-	jq -n '{"status": "Success", "attached": true}'
+        reply Success attached true
 	exit 0
 }
 
 op=$1
 
 if [ "$op" = "init" ]; then
-	jq -n '{"status": "Success"}'
+        reply Success
 	exit 0
 fi
 
@@ -192,8 +218,8 @@ case "$op" in
                 isattached "$@"
                 ;;
 	*)
-		jq -n '{"status": "Not supported"}'
-		exit 0
+                reply "Not supported"
+		exit 1
 esac
 
 exit 1
