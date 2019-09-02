@@ -52,7 +52,7 @@ reply() {
   local status=$1 ; shift
 
   local reply
-  reply=$( jq -nc --arg status "$status" '{"status": $status}' )
+  reply=$( jq -nc --arg status "$status" '{"status": ($status)}' )
 
   local temp
   while [ "$#" -gt 0 ] ; do
