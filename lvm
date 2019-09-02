@@ -18,10 +18,14 @@
 _debug='[]'
 
 for arg in "$@" ; do
-  _debug=$( printf -- '%s' "$_debug" | jq --arg arg "$arg" '. + [$arg]' )
+  if _temp=$( printf -- '%s' "$_debug" | jq --argjson arg "$arg" '. + [$arg]' ) ; then
+    _debug=$_temp
+  else
+    _debug=$( printf -- '%s' "$_debug" | jq --arg arg "$arg" '. + [$arg]' )
+  fi
 done
 
-printf -- '%s\n' "$_debug" >> /var/log/lvm-flexvolume.log
+printf -- '\n%s\n' "$_debug" >> /var/log/lvm-flexvolume.log
 
 # Required packages:
 #
