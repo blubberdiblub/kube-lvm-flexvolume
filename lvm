@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # Copyright 2015 The Kubernetes Authors.
 # Copyright 2017 Piotr Mazurkiewicz <piotr.mazurkiewicz@sysoperator.pl>
@@ -21,151 +21,136 @@
 #  - thin-provisionig-tools
 #
 usage() {
-	err "Invalid usage. Usage: "
-	err "\t$0 init"
-	err "\t$0 attach <json params> <nodename>"
-	err "\t$0 detach <mount device> <nodename>"
-	err "\t$0 waitforattach <mount device> <json params>"
-	err "\t$0 mountdevice <mount dir> <mount device> <json params>"
-	err "\t$0 unmountdevice <mount dir>"
-	err "\t$0 isattached <json params> <nodename>"
+	cat <<EOF
+Invalid usage. Usage:
+  $0 init
+  $0 attach <json params> <nodename>
+  $0 detach <mount device> <nodename>
+  $0 waitforattach <mount device> <json params>
+  $0 mountdevice <mount dir> <mount device> <json params>
+  $0 unmountdevice <mount dir>
+  $0 isattached <json params> <nodename>
+EOF
 	exit 1
 }
 
-err() {
-	echo -ne $* 1>&2
-}
-
-log() {
-	echo -ne $* >&1
-}
-
 ismounted() {
-	MOUNT=`findmnt -n ${MNTPATH} 2>/dev/null | cut -d' ' -f1`
-	if [ "${MOUNT}" == "${MNTPATH}" ]; then
-		echo "1"
-	else
-		echo "0"
-	fi
+	MOUNT=$(findmnt -n "${MNTPATH}" 2>/dev/null | cut -d' ' -f1)
+	[ "${MOUNT}" = "${MNTPATH}" ]
 }
 
 getdevice() {
-	VOLUMEID=$(echo ${JSON_PARAMS} | jq -r '.volumeID')
-	VG=$(echo ${JSON_PARAMS} | jq -r '.volumegroup')
+	VOLUMEID=$(printf -- '%s' "${JSON_PARAMS}" | jq -r '.volumeID')
+	VG=$(printf -- '%s' "${JSON_PARAMS}" | jq -r '.volumegroup')
 
 	# LVM substitutes - with --
-	VOLUMEID=`echo $VOLUMEID | sed s/-/--/g`
-	VG=`echo $VG | sed s/-/--/g`
+	VOLUMEID=$(printf -- '%s' "$VOLUMEID" | sed s/-/--/g)
+	VG=$(printf -- '%s' "$VG" | sed s/-/--/g)
 
 	DMDEV="/dev/mapper/${VG}-${VOLUMEID}"
-	echo ${DMDEV}
+	printf -- '%s' "$DMDEV"
 }
 
 attach() {
 	JSON_PARAMS=$1
-	VOLUMEID=$(echo ${JSON_PARAMS} | jq -r '.volumeID')
-	VG=$(echo ${JSON_PARAMS} | jq -r '.volumegroup')
-	THINPOOL=$(echo ${JSON_PARAMS} | jq -r '.thinpool | select(type == "string")')
-	SIZE=$(echo ${JSON_PARAMS} | jq -r '.size')
+	VOLUMEID=$(printf -- '%s' "${JSON_PARAMS}" | jq -r '.volumeID')
+	VG=$(printf -- '%s' "${JSON_PARAMS}" | jq -r '.volumegroup')
+	THINPOOL=$(printf -- '%s' "${JSON_PARAMS}" | jq -r '.thinpool | select(type == "string")')
+	SIZE=$(printf -- '%s' "${JSON_PARAMS}" | jq -r '.size')
 
 	DMDEV=$(getdevice)
 	if [ ! -b "${DMDEV}" ]; then
 		if [ -n "${THINPOOL}" ]; then
-			LVCREATE_OPTS="-n ${VOLUMEID} -V ${SIZE} --thinpool ${VG}/${THINPOOL}"
+			lvcreate -n "$VOLUMEID" -V "$SIZE" --thinpool "$VG/$THINPOOL" > /dev/null && created=true || created=false
 		else
-			LVCREATE_OPTS="-n ${VOLUMEID} -L ${SIZE} ${VG}"
+			lvcreate -n "$VOLUMEID" -L "$SIZE" "$VG" > /dev/null && created=true || created=false
 		fi
 
-		lvcreate ${LVCREATE_OPTS} 2>&1 > /dev/null
-		if [ "$?" != "0" ]; then
-			err "{\"status\": \"Failure\", \"message\": \"Could not attach ${VG}/${VOLUMEID}\"}"
+		if ! $created; then
+			jq -n --arg vol "$VG/$VOLUMEID" '{"status": "Failure", "message": ("Could not attach " + $vol)}'
 			exit 1
 		fi
 	fi
-	log "{\"status\": \"Success\", \"device\":\"${DMDEV}\"}"
+
+	jq -n --arg dev "$DMDEV" '{"status": "Success", "device": $dev}'
 	exit 0
 }
 
 detach() {
-	log "{\"status\": \"Success\"}"
+	jq -n '{"status": "Success"}'
 	exit 0
 }
 
 waitforattach() {
 	shift
-	attach $*
+	attach "$@"
 }
 
 domountdevice() {
 	MNTPATH=$1
 	DMDEV=$2
-	FSTYPE=$(echo $3 | jq -r '.["kubernetes.io/fsType"]')
-	MNTOPTIONS=$(echo $3 | jq -r '.mountoptions | select(type == "string")')
+	FSTYPE=$(printf -- '%s' "$3" | jq -r '.["kubernetes.io/fsType"]')
+	MNTOPTIONS=$(printf -- '%s' "$3" | jq -r '.mountoptions | select(type == "string")')
 
 	if [ ! -b "${DMDEV}" ]; then
-		err "{\"status\": \"Failure\", \"message\": \"${DMDEV} does not exist\"}"
+		jq -n --arg dev "$DMDEV" '{"status": "Failure", "message": ($dev + " does not exist")}'
 		exit 1
 	fi
 
-	if [ $(ismounted) -eq 1 ] ; then
-		log "{\"status\": \"Success\"}"
+	if ismounted ; then
+		jq -n '{"status": "Success"}'
 		exit 0
 	fi
 
-	VOLFSTYPE=`blkid -o udev ${DMDEV} 2>/dev/null|grep "ID_FS_TYPE"|cut -d"=" -f2`
-	if [ "${VOLFSTYPE}" == "" ]; then
-		mkfs -t ${FSTYPE} ${DMDEV} >/dev/null 2>&1
-		if [ $? -ne 0 ]; then
-			err "{ \"status\": \"Failure\", \"message\": \"Failed to create fs ${FSTYPE} on device ${DMDEV}\"}"
+	VOLFSTYPE=$(blkid -o udev "${DMDEV}" 2>/dev/null|grep "ID_FS_TYPE"|cut -d"=" -f2)
+	if [ "${VOLFSTYPE}" = "" ]; then
+		if ! mkfs -t "${FSTYPE}" "${DMDEV}" >/dev/null 2>&1 ; then
+			jq -n --arg fs "$FSTYPE" --arg dev "$DMDEV" '{"status": "Failure", "message": ("Failed to create fs " + $fs + " on device " + $dev)}'
 			exit 1
 		fi
 	fi
 
-	mkdir -p ${MNTPATH} &> /dev/null
+	mkdir -p "${MNTPATH}" > /dev/null 2>&1
 
-	if [ -n "$MNTOPTIONS" ]; then
-		MNTOPTIONS="-o ${MNTOPTIONS}"
-	fi
-	mount ${MNTOPTIONS} ${DMDEV} ${MNTPATH} &> /dev/null
-	if [ $? -ne 0 ]; then
-		err "{ \"status\": \"Failure\", \"message\": \"Failed to mount device ${DMDEV} at ${MNTPATH}\"}"
+	if ! mount ${MNTOPTIONS:+-o "$MNTOPTIONS"} "${DMDEV}" "${MNTPATH}" > /dev/null 2>&1 ; then
+		jq -n --arg dev "$DMDEV" --arg mnt "$MNTPATH" '{"status": "Failure", "message": ("Failed to mount device " + $dev + " at " + $mnt)}'
 		exit 1
 	fi
-	log "{\"status\": \"Success\"}"
+
+	jq -n '{"status": "Success"}'
 	exit 0
 }
 
 unmountdevice() {
 	MNTPATH=$1
-	if [ ! -d ${MNTPATH} ]; then
-		log "{\"status\": \"Success\"}"
+	if [ ! -d "${MNTPATH}" ]; then
+		jq -n '{"status": "Success"}'
 		exit 0
 	fi
 
-	if [ $(ismounted) -eq 0 ] ; then
-		log "{\"status\": \"Success\"}"
+	if ! ismounted ; then
+		jq -n '{"status": "Success"}'
 		exit 0
 	fi
 
-	umount ${MNTPATH} &> /dev/null
-	if [ $? -ne 0 ]; then
-		err "{ \"status\": \"Failed\", \"message\": \"Failed to unmount volume at ${MNTPATH}\"}"
+	if ! umount "${MNTPATH}" > /dev/null 2>&1 ; then
+		jq -n --arg mnt "$MNTPATH" '{"status": "Failed", "message": ("Failed to unmount volume at " + $mnt)}'
 		exit 1
 	fi
 
-	log "{\"status\": \"Success\"}"
+	jq -n '{"status": "Success"}'
 	exit 0
 }
 
 isattached() {
-	log "{\"status\": \"Success\", \"attached\":true}"
+	jq -n '{"status": "Success", "attached": true}'
 	exit 0
 }
 
 op=$1
 
 if [ "$op" = "init" ]; then
-	log "{\"status\": \"Success\"}"
+	jq -n '{"status": "Success"}'
 	exit 0
 fi
 
@@ -177,25 +162,25 @@ shift
 
 case "$op" in
 	attach)
-		attach $*
+		attach "$@"
 		;;
 	detach)
-		detach $*
+		detach "$@"
 		;;
 	waitforattach)
-		waitforattach $*
+		waitforattach "$@"
 		;;
 	mountdevice)
-		domountdevice $*
+		domountdevice "$@"
 		;;
 	unmountdevice)
-		unmountdevice $*
+		unmountdevice "$@"
 		;;
 	isattached)
-                isattached $*
+                isattached "$@"
                 ;;
 	*)
-		log "{ \"status\": \"Not supported\" }"
+		jq -n '{"status": "Not supported"}'
 		exit 0
 esac
 
