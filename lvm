@@ -18,7 +18,7 @@
 _debug='[]'
 
 for arg in "$@" ; do
-  if _temp=$( printf -- '%s' "$_debug" | jq --argjson arg "$arg" '. + [$arg]' ) ; then
+  if _temp=$( printf -- '%s' "$_debug" | jq --argjson arg "$arg" '. + [$arg]' 2> /dev/null ) ; then
     _debug=$_temp
   else
     _debug=$( printf -- '%s' "$_debug" | jq --arg arg "$arg" '. + [$arg]' )
