@@ -49,27 +49,24 @@ EOF
 reply() {
   [ -n "$1" ] || { echo "missing status" >&2 ; exit 1 ; }
 
-  local status="$1" ; shift
+  reply_reply=$( jq -nc --arg status "$1" '{"status": $status}' )
+  shift
 
-  local reply
-  reply=$( jq -nc --arg status "$status" '{"status": $status}' )
-
-  local temp
   while [ "$#" -gt 0 ] ; do
     [ -n "$1" ] || { echo "missing key" >&2 ; exit 1 ; }
 
-    if temp=$( printf -- '%s' "$reply" | jq -c --arg key "$1" --argjson value "$2" '. + {($key): $value}' 2> /dev/null ) ; then
-      reply=$temp
+    if reply_temp=$( printf -- '%s' "$reply_reply" | jq -c --arg key "$1" --argjson value "$2" '. + {($key): $value}' 2> /dev/null ) ; then
+      reply_reply=$reply_temp
     else
-      reply=$( printf -- '%s' "$reply" | jq -c --arg key "$1" --arg value "$2" '. + {($key): $value}' )
+      reply_reply=$( printf -- '%s' "$reply_reply" | jq -c --arg key "$1" --arg value "$2" '. + {($key): $value}' )
     fi
 
     shift
     shift
   done
 
-  printf -- '%s' "$reply" | jq . >> /var/log/lvm-flexvolume.log
-  printf -- '%s' "$reply"
+  printf -- '%s' "$reply_reply" | jq . >> /var/log/lvm-flexvolume.log
+  printf -- '%s' "$reply_reply"
 }
 
 ismounted() {
