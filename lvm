@@ -16,14 +16,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_debug='[]'
+if [ "$1" != "_DEBUG" ] ; then
+  _debug='[]'
+  for _arg in "$@" ; do
+    if _temp=$( printf -- '%s' "$_debug" | jq --argjson arg "$_arg" '. + [$arg]' 2> /dev/null ) ; then
+      _debug=$_temp
+    else
+      _debug=$( printf -- '%s' "$_debug" | jq --arg arg "$_arg" '. + [$arg]' )
+    fi
+  done
 
-for arg in "$@" ; do
-  if _temp=$( printf -- '%s' "$_debug" | jq --argjson arg "$arg" '. + [$arg]' 2> /dev/null ) ; then
-    _debug=$_temp
+  printf -- '\n%s\n' "$_debug" >> /var/log/lvm-flexvolume.log
+
+  _debug=$( "$0" _DEBUG "$@" 2>&1 )
+  _rc=$?
+
+  printf -- 'return code: %d\n' "$_rc" >> /var/log/lvm-flexvolume.log
+
+  if _temp=$( jq -n --argjson parse "$_debug" '$parse' 2> /dev/null ) ; then
+    printf -- 'json result:\n%s\n' "$_temp" >> /var/log/lvm-flexvolume.log
   else
-    _debug=$( printf -- '%s' "$_debug" | jq --arg arg "$arg" '. + [$arg]' )
+    printf -- 'invalid result:\n%s\n' "$_debug" >> /var/log/lvm-flexvolume.log
   fi
+
+  exit "$_rc"
+else
+  shift
+fi
 done
 
 printf -- '\n%s\n' "$_debug" >> /var/log/lvm-flexvolume.log
