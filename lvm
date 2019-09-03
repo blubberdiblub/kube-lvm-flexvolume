@@ -2,7 +2,7 @@
 
 # Copyright 2015 The Kubernetes Authors.
 # Copyright 2017 Piotr Mazurkiewicz <piotr.mazurkiewicz@sysoperator.pl>
-# 2019 Niels Boehm <blubberdiblub@gmail.com>
+# Copyright 2019 Niels Boehm <blubberdiblub@gmail.com>
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -43,197 +43,222 @@ if [ "$1" != "_DEBUG" ] ; then
 else
   shift
 fi
-done
 
-printf -- '\n%s\n' "$_debug" >> /var/log/lvm-flexvolume.log
-
-# Required packages:
-#
-#  - jq
-#  - thin-provisionig-tools
-#
-usage() {
-	cat <<EOF
-Invalid usage. Usage:
-  $0 init
-  $0 attach <json params> <nodename>
-  $0 detach <mount device> <nodename>
-  $0 waitforattach <mount device> <json params>
-  $0 mountdevice <mount dir> <mount device> <json params>
-  $0 unmountdevice <mount dir>
-  $0 isattached <json params> <nodename>
-EOF
-	exit 1
+fail_hard() {
+  echo "$*" >&2
+  exit 2
 }
 
-reply() {
-  [ -n "$1" ] || { echo "missing status" >&2 ; exit 1 ; }
+for cmd in blkid jq lvcreate mkfs mount mountpoint umount ; do
+  command -v "$cmd" > /dev/null || fail_hard "missing command $cmd"
+done
 
-  reply_reply=$( jq -nc --arg status "$1" '{"status": $status}' )
-  shift
+json_add_simple() {
+  [ $# -eq 2 ] || fail_hard "json_add_simple(): takes exactly 2 arguments"
 
-  while [ "$#" -gt 0 ] ; do
-    [ -n "$1" ] || { echo "missing key" >&2 ; exit 1 ; }
+  jq -c --arg key "$1" --arg value "$2" '. + {($key): $value}' || fail_hard "json_add_simple(): jq failed"
+}
 
-    if reply_temp=$( printf -- '%s' "$reply_reply" | jq -c --arg key "$1" --argjson value "$2" '. + {($key): $value}' 2> /dev/null ) ; then
-      reply_reply=$reply_temp
-    else
-      reply_reply=$( printf -- '%s' "$reply_reply" | jq -c --arg key "$1" --arg value "$2" '. + {($key): $value}' )
-    fi
+json_add_json() {
+  [ $# -eq 2 ] || fail_hard "json_add_json(): takes exactly 2 arguments"
 
-    shift
-    shift
-  done
+  jq -c --arg key "$1" --argjson value "$2" '. + {($key): $value}' || fail_hard "json_add_json(): jq failed"
+}
 
-  printf -- '%s' "$reply_reply" | jq . >> /var/log/lvm-flexvolume.log
-  printf -- '%s' "$reply_reply"
+json_get() {
+  [ $# -eq 2 ] || fail_hard "json_get(): takes exactly 2 arguments"
+
+  jq -n -e -r --argjson parse "$1" --arg key "$2" '$parse[$key]' || fail_hard "json_get(): jq failed"
+}
+
+json_get_string() {
+  [ $# -eq 2 ] || fail_hard "json_get_string(): takes exactly 2 arguments"
+
+  jq -n -r --argjson parse "$1" --arg key "$2" '$parse[$key] | select(type=="string")' || fail_hard "json_get_string(): jq failed"
+}
+
+reply_status() {
+  [ $# -eq 1 ] || fail_hard "reply_status(): takes exactly 1 argument"
+
+  printf '{}' | json_add_simple status "$1" || fail_hard "reply_status(): building reply failed"
+}
+
+reply_simple() {
+  [ $# -eq 3 ] || fail_hard "reply_simple(): takes exactly 3 arguments"
+
+  reply_status "$1" | json_add_simple "$2" "$3" || fail_hard "reply_simple(): building reply failed"
+}
+
+reply_json() {
+  [ $# -eq 3 ] || fail_hard "reply_json(): takes exactly 3 arguments"
+
+  reply_status "$1" | json_add_json "$2" "$3" || fail_hard "reply_json(): building reply failed"
+}
+
+lv_report() {
+  [ $# -eq 1 ] || fail_hard "lv_report(): takes exactly 1 argument"
+
+  lv_report=$( lvs --select "$1" -o lv_all --reportformat json ) || return 1
+
+  jq -n -c --argjson parse "$lv_report" '$parse["report"][]["lv"][]' || fail_hard "lv_report(): jq failed"
 }
 
 init() {
-  reply Success
-}
+  [ $# -eq 0 ] || fail_hard "init(): takes no arguments"
 
-ismounted() {
-	MOUNT=$(findmnt -n "${MNTPATH}" 2>/dev/null | cut -d' ' -f1)
-	[ "${MOUNT}" = "${MNTPATH}" ]
-}
-
-getdevice() {
-	VOLUMEID=$(printf -- '%s' "${JSON_PARAMS}" | jq -r '.volumeID')
-	VG=$(printf -- '%s' "${JSON_PARAMS}" | jq -r '.volumegroup')
-
-	# LVM substitutes - with --
-	VOLUMEID=$(printf -- '%s' "$VOLUMEID" | sed s/-/--/g)
-	VG=$(printf -- '%s' "$VG" | sed s/-/--/g)
-
-	DMDEV="/dev/mapper/${VG}-${VOLUMEID}"
-	printf -- '%s' "$DMDEV"
+  reply_json Success capabilities "$( printf '{}' | json_add_json attach true )" || fail_hard "init(): building reply failed"
 }
 
 attach() {
-	JSON_PARAMS=$1
-	VOLUMEID=$(printf -- '%s' "${JSON_PARAMS}" | jq -r '.volumeID')
-	VG=$(printf -- '%s' "${JSON_PARAMS}" | jq -r '.volumegroup')
-	THINPOOL=$(printf -- '%s' "${JSON_PARAMS}" | jq -r '.thinpool | select(type == "string")')
-	SIZE=$(printf -- '%s' "${JSON_PARAMS}" | jq -r '.size')
+  [ $# -eq  2 ] || fail_hard "attach(): takes exactly 2 arguments"
 
-	DMDEV=$(getdevice)
-	if [ ! -b "${DMDEV}" ]; then
-		if [ -n "${THINPOOL}" ]; then
-			lvcreate -n "$VOLUMEID" -V "$SIZE" --thinpool "$VG/$THINPOOL" > /dev/null && created=true || created=false
-		else
-			lvcreate -n "$VOLUMEID" -L "$SIZE" "$VG" > /dev/null && created=true || created=false
-		fi
+  volumegroup=$( json_get "$1" volumegroup )
+  thinpool=$( json_get_string "$1" thinpool )
+  volumeID=$( json_get "$1" volumeID )
+  size=$( json_get "$1" size )
 
-		if ! $created; then
-      reply Failure message "Could not attach $VG/$VOLUMEID"
-      exit 1
-		fi
-	fi
+  if lv_report=$( lv_report 'lv_full_name="'"$volumegroup/$volumeID"'"' ) ; then
+    lv_uuid=$( json_get "$lv_report" lv_uuid )
+    reply_simple Success device "$lv_uuid"
+    return 0
+  fi
 
-  reply Success device "$DMDEV"
-}
+  if [ -z "$thinpool" ] ; then
+    lvcreate --name "$volumeID" --size "$size" -- "$volumegroup" > /dev/null 2>&1 && success=true || success=false
+  else
+    lvcreate --name "$volumeID" --virtualsize "$size" --thinpool "$thinpool" -- "$volumegroup" > /dev/null 2>&1 && success=true || success=false
+  fi
 
-detach() {
-  reply Success
+  if ! $success ; then
+    reply_simple Failure message "Could not attach $volumegroup/$volumeID"
+    exit 1
+  fi
+
+  if ! lv_report=$( lv_report 'lv_full_name="'"$volumegroup/$volumeID"'"' ) ; then
+    reply_simple Failure message "Could not query $volumegroup/$volumeID"
+    exit 1
+  fi
+
+  lv_uuid=$( json_get "$lv_report" lv_uuid )
+  reply_simple Success device "$lv_uuid"
 }
 
 waitforattach() {
-	shift
-	attach "$@"
-}
+  [ $# -eq  2 ] || fail_hard "waitforattach(): takes exactly 2 arguments"
 
-domountdevice() {
-	MNTPATH=$1
-	DMDEV=$2
-	FSTYPE=$(printf -- '%s' "$3" | jq -r '.["kubernetes.io/fsType"]')
-	MNTOPTIONS=$(printf -- '%s' "$3" | jq -r '.mountoptions | select(type == "string")')
+  lv_uuid="$1"
+  if [ -z "$lv_uuid" ] ; then
+    intercept=$( attach "$2" "" ) || exit 1
+    lv_uuid=$( json_get "$intercept" device )
+  fi
 
-	if [ ! -b "${DMDEV}" ]; then
-    reply Failure message "$DMDEV does not exist"
+  if ! lv_report=$( lv_report 'lv_uuid="'"$lv_uuid"'"' ) ; then
+    reply_simple Failure message "Could not find volume $lv_uuid"
     exit 1
-	fi
+  fi
 
-	if ismounted ; then
-    reply Success
-    return 0
-	fi
-
-	VOLFSTYPE=$(blkid -o udev "${DMDEV}" 2>/dev/null|grep "ID_FS_TYPE"|cut -d"=" -f2)
-	if [ "${VOLFSTYPE}" = "" ]; then
-		if ! mkfs -t "${FSTYPE}" "${DMDEV}" >/dev/null 2>&1 ; then
-      reply Failure message "Failed to create fs $FSTYPE on device $DMDEV"
-      exit 1
-		fi
-	fi
-
-	mkdir -p "${MNTPATH}" > /dev/null 2>&1
-
-	if ! mount ${MNTOPTIONS:+-o "$MNTOPTIONS"} "${DMDEV}" "${MNTPATH}" > /dev/null 2>&1 ; then
-    reply Failure message "Failed to mount device $DMDEV at $MNTPATH"
+  if [ -z "$( json_get_string "$lv_report" lv_active_locally )" ] ; then
+    reply_simple Failure message "Volume $lv_uuid not active locally"
     exit 1
-	fi
+  fi
 
-  reply Success
-}
-
-unmountdevice() {
-	MNTPATH=$1
-	if [ ! -d "${MNTPATH}" ]; then
-    reply Success
-    return 0
-	fi
-
-	if ! ismounted ; then
-    reply Success
-    return 0
-	fi
-
-	if ! umount "${MNTPATH}" > /dev/null 2>&1 ; then
-    reply Failure message "Failed to unmount volume at $MNTPATH"
-    exit 1
-	fi
-
-  reply Success
+  reply_simple Success device "$lv_uuid"
 }
 
 isattached() {
-  reply Success attached true
+  [ $# -eq  2 ] || fail_hard "isattached(): takes exactly 2 arguments"
+
+  volumegroup=$( json_get "$1" volumegroup )
+  volumeID=$( json_get "$1" volumeID )
+
+  if ! lv_report=$( lv_report 'lv_full_name="'"$volumegroup/$volumeID"'"' ) ; then
+    reply_json Success attached false
+    return 0
+  fi
+
+  if [ -z "$( json_get_string "$lv_report" lv_active_locally )" ] ; then
+    reply_json Success attached false
+    return 0
+  fi
+
+  reply_json Success attached true
+}
+
+detach() {
+  reply_status Success
+}
+
+mountdevice() {
+  [ $# -eq  3 ] || fail_hard "mountdevice(): takes exactly 3 arguments"
+
+  if ! lv_report=$( lv_report 'lv_uuid="'"$2"'"' ) ; then
+    reply_simple Failure message "Could not find volume $2"
+    exit 1
+  fi
+
+  lv_dm_path=$( json_get "$lv_report" lv_dm_path )
+  if [ ! -b "$lv_dm_path" ] ; then
+    reply_simple Failure message "$lv_dm_path does not exist"
+    exit 1
+  fi
+
+  if mountpoint -q -- "$1" ; then
+    reply_status Success
+    return 0
+  fi
+
+  fstype=$( json_get "$3" kubernetes.io/fsType )
+
+  if [ -z "$( blkid --match-tag TYPE --output value --no-encoding -- "$lv_dm_path" )" ] ; then
+    if ! mkfs -t "$fstype" -- "$lv_dm_path" > /dev/null 2>&1 ; then
+      reply_simple Failure message "Failed to create fs $fstype on device $lv_dm_path"
+      exit 1
+    fi
+  fi
+
+  if ! mkdir -p -- "$1" > /dev/null 2>&1 ; then
+    reply_simple Failure message "Failed to make directory $1"
+    exit 1
+  fi
+
+  mountoptions=$( json_get_string "$3" mountoptions )
+
+  if ! mount -t "$fstype" ${mountoptions:+-o "$mountoptions"} -- "$lv_dm_path" "$1" > /dev/null 2>&1 ; then
+    reply_simple Failure message "Failed to mount device $lv_dm_path at $1"
+    exit 1
+  fi
+
+  reply_status Success
+}
+
+unmountdevice() {
+  [ $# -eq  1 ] || fail_hard "mountdevice(): takes exactly 1 argument"
+
+  if ! mountpoint -q -- "$1" ; then
+    reply_status Success
+    return 0
+  fi
+
+  if ! umount -- "$1" > /dev/null 2>&1 ; then
+    reply_simple Failure message "Failed to unmount volume at $1"
+    exit 1
+  fi
+
+  reply_status Success
 }
 
 op=$1
-
-if [ $# -lt 2 ]; then
-	usage
-fi
-
 shift
 
 case "$op" in
-  init)
-    init "$@"
-    ;;
-	attach)
-		attach "$@"
-		;;
-	detach)
-		detach "$@"
-		;;
-	waitforattach)
-		waitforattach "$@"
-		;;
-	mountdevice)
-		domountdevice "$@"
-		;;
-	unmountdevice)
-		unmountdevice "$@"
-		;;
-	isattached)
-    isattached "$@"
-    ;;
-  *)
-    reply "Not supported"
-    exit 1
+init)          init "$@"          ;;
+attach)        attach "$@"        ;;
+waitforattach) waitforattach "$@" ;;
+isattached)    isattached "$@"    ;;
+detach)        detach "$@"        ;;
+mountdevice)   mountdevice "$@"   ;;
+unmountdevice) unmountdevice "$@" ;;
+*)
+  reply_status "Not supported"
+  exit 1
 esac
-
-exit 0
