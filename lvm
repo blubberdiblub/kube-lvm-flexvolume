@@ -2,6 +2,7 @@
 
 # Copyright 2015 The Kubernetes Authors.
 # Copyright 2017 Piotr Mazurkiewicz <piotr.mazurkiewicz@sysoperator.pl>
+# 2019 Niels Boehm <blubberdiblub@gmail.com>
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -69,6 +70,10 @@ reply() {
   printf -- '%s' "$reply_reply"
 }
 
+init() {
+  reply Success
+}
+
 ismounted() {
 	MOUNT=$(findmnt -n "${MNTPATH}" 2>/dev/null | cut -d' ' -f1)
 	[ "${MOUNT}" = "${MNTPATH}" ]
@@ -102,18 +107,16 @@ attach() {
 		fi
 
 		if ! $created; then
-                        reply Failure message "Could not attach $VG/$VOLUMEID"
-			exit 1
+      reply Failure message "Could not attach $VG/$VOLUMEID"
+      exit 1
 		fi
 	fi
 
-        reply Success device "$DMDEV"
-	exit 0
+  reply Success device "$DMDEV"
 }
 
 detach() {
-        reply Success
-	exit 0
+  reply Success
 }
 
 waitforattach() {
@@ -128,66 +131,58 @@ domountdevice() {
 	MNTOPTIONS=$(printf -- '%s' "$3" | jq -r '.mountoptions | select(type == "string")')
 
 	if [ ! -b "${DMDEV}" ]; then
-                reply Failure message "$DMDEV does not exist"
-		exit 1
+    reply Failure message "$DMDEV does not exist"
+    exit 1
 	fi
 
 	if ismounted ; then
-                reply Success
-		exit 0
+    reply Success
+    return 0
 	fi
 
 	VOLFSTYPE=$(blkid -o udev "${DMDEV}" 2>/dev/null|grep "ID_FS_TYPE"|cut -d"=" -f2)
 	if [ "${VOLFSTYPE}" = "" ]; then
 		if ! mkfs -t "${FSTYPE}" "${DMDEV}" >/dev/null 2>&1 ; then
-                        reply Failure message "Failed to create fs $FSTYPE on device $DMDEV"
-			exit 1
+      reply Failure message "Failed to create fs $FSTYPE on device $DMDEV"
+      exit 1
 		fi
 	fi
 
 	mkdir -p "${MNTPATH}" > /dev/null 2>&1
 
 	if ! mount ${MNTOPTIONS:+-o "$MNTOPTIONS"} "${DMDEV}" "${MNTPATH}" > /dev/null 2>&1 ; then
-                reply "Failure" message "Failed to mount device $DMDEV at $MNTPATH"
-		exit 1
+    reply Failure message "Failed to mount device $DMDEV at $MNTPATH"
+    exit 1
 	fi
 
-        reply Success
-	exit 0
+  reply Success
 }
 
 unmountdevice() {
 	MNTPATH=$1
 	if [ ! -d "${MNTPATH}" ]; then
-                reply Success
-		exit 0
+    reply Success
+    return 0
 	fi
 
 	if ! ismounted ; then
-                reply Success
-		exit 0
+    reply Success
+    return 0
 	fi
 
 	if ! umount "${MNTPATH}" > /dev/null 2>&1 ; then
-                reply Failure message "Failed to unmount volume at $MNTPATH"
-		exit 1
+    reply Failure message "Failed to unmount volume at $MNTPATH"
+    exit 1
 	fi
 
-        reply Success
-	exit 0
+  reply Success
 }
 
 isattached() {
-        reply Success attached true
-	exit 0
+  reply Success attached true
 }
 
 op=$1
-
-if [ "$op" = "init" ]; then
-        reply Success
-	exit 0
-fi
 
 if [ $# -lt 2 ]; then
 	usage
@@ -196,6 +191,9 @@ fi
 shift
 
 case "$op" in
+  init)
+    init "$@"
+    ;;
 	attach)
 		attach "$@"
 		;;
@@ -212,11 +210,11 @@ case "$op" in
 		unmountdevice "$@"
 		;;
 	isattached)
-                isattached "$@"
-                ;;
-	*)
-                reply "Not supported"
-		exit 1
+    isattached "$@"
+    ;;
+  *)
+    reply "Not supported"
+    exit 1
 esac
 
-exit 1
+exit 0
