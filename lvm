@@ -110,6 +110,40 @@ init() {
   reply_json Success capabilities "$( printf '{}' | json_add_json attach true )" || fail_hard "init(): building reply failed"
 }
 
+getvolumename() {
+  [ $# -eq  1 ] || fail_hard "getvolumename(): takes exactly 1 argument"
+
+  volumegroup=$( json_get "$1" volumegroup )
+  thinpool=$( json_get_string "$1" thinpool )
+  volumeID=$( json_get "$1" volumeID )
+  size=$( json_get "$1" size )
+
+  if lv_report=$( lv_report 'lv_full_name="'"$volumegroup/$volumeID"'"' ) ; then
+    lv_uuid=$( json_get "$lv_report" lv_uuid )
+    reply_simple Success volumeName "$lv_uuid"
+    return 0
+  fi
+
+  if [ -z "$thinpool" ] ; then
+    lvcreate --name "$volumeID" --size "$size" -- "$volumegroup" > /dev/null 2>&1 && success=true || success=false
+  else
+    lvcreate --name "$volumeID" --virtualsize "$size" --thinpool "$thinpool" -- "$volumegroup" > /dev/null 2>&1 && success=true || success=false
+  fi
+
+  if ! $success ; then
+    reply_simple Failure message "Could not create $volumegroup/$volumeID"
+    exit 1
+  fi
+
+  if ! lv_report=$( lv_report 'lv_full_name="'"$volumegroup/$volumeID"'"' ) ; then
+    reply_simple Failure message "Could not query $volumegroup/$volumeID"
+    exit 1
+  fi
+
+  lv_uuid=$( json_get "$lv_report" lv_uuid )
+  reply_simple Success volumeName "$lv_uuid"
+}
+
 attach() {
   [ $# -eq  2 ] || fail_hard "attach(): takes exactly 2 arguments"
 
@@ -119,8 +153,8 @@ attach() {
   size=$( json_get "$1" size )
 
   if lv_report=$( lv_report 'lv_full_name="'"$volumegroup/$volumeID"'"' ) ; then
-    lv_uuid=$( json_get "$lv_report" lv_uuid )
-    reply_simple Success device "$lv_uuid"
+    lv_dm_path=$( json_get "$lv_report" lv_dm_path )
+    reply_simple Success device "$lv_dm_path"
     return 0
   fi
 
@@ -140,30 +174,30 @@ attach() {
     exit 1
   fi
 
-  lv_uuid=$( json_get "$lv_report" lv_uuid )
-  reply_simple Success device "$lv_uuid"
+  lv_dm_path=$( json_get "$lv_report" lv_dm_path )
+  reply_simple Success device "$lv_dm_path"
 }
 
 waitforattach() {
   [ $# -eq  2 ] || fail_hard "waitforattach(): takes exactly 2 arguments"
 
-  lv_uuid="$1"
-  if [ -z "$lv_uuid" ] ; then
+  lv_dm_path="$1"
+  if [ -z "$lv_dm_path" ] ; then
     intercept=$( attach "$2" "" ) || exit 1
-    lv_uuid=$( json_get "$intercept" device )
+    lv_dm_path=$( json_get "$intercept" device )
   fi
 
-  if ! lv_report=$( lv_report 'lv_uuid="'"$lv_uuid"'"' ) ; then
-    reply_simple Failure message "Could not find volume $lv_uuid"
+  if ! lv_report=$( lv_report 'lv_dm_path="'"$lv_dm_path"'"' ) ; then
+    reply_simple Failure message "Could not find volume $lv_dm_path"
     exit 1
   fi
 
   if [ -z "$( json_get_string "$lv_report" lv_active_locally )" ] ; then
-    reply_simple Failure message "Volume $lv_uuid not active locally"
+    reply_simple Failure message "Volume $lv_dm_path not active locally"
     exit 1
   fi
 
-  reply_simple Success device "$lv_uuid"
+  reply_simple Success device "$lv_dm_path"
 }
 
 isattached() {
@@ -192,16 +226,17 @@ detach() {
 mountdevice() {
   [ $# -eq  3 ] || fail_hard "mountdevice(): takes exactly 3 arguments"
 
-  if ! lv_report=$( lv_report 'lv_uuid="'"$2"'"' ) ; then
+  if ! lv_report=$( lv_report 'lv_dm_path="'"$2"'"' ) ; then
     reply_simple Failure message "Could not find volume $2"
     exit 1
   fi
 
-  lv_dm_path=$( json_get "$lv_report" lv_dm_path )
-  if [ ! -b "$lv_dm_path" ] ; then
-    reply_simple Failure message "$lv_dm_path does not exist"
-    exit 1
-  fi
+  #lv_dm_path=$( json_get "$lv_report" lv_dm_path )
+  #if [ ! -b "$lv_dm_path" ] ; then
+  #  reply_simple Failure message "$lv_dm_path does not exist"
+  #  exit 1
+  #fi
+  lv_dm_path=$2
 
   if mountpoint -q -- "$1" ; then
     reply_status Success
@@ -255,6 +290,7 @@ shift
 
 case "$op" in
 init)          init "$@"          ;;
+getvolumename) getvolumename "$@" ;;
 attach)        attach "$@"        ;;
 waitforattach) waitforattach "$@" ;;
 isattached)    isattached "$@"    ;;
