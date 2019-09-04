@@ -248,6 +248,8 @@ unmountdevice() {
   reply_status Success
 }
 
+[ $# -ge 1 ] || fail_hard "missing operation"
+
 op=$1
 shift
 
