@@ -30,8 +30,7 @@ if [ "$1" != "_DEBUG" ] ; then
 
   printf -- '\n%s\n' "$_debug" >> /var/log/lvm-flexvolume.log
 
-  _debug=$( "$0" _DEBUG "$@" )
-  _rc=$?
+  _debug=$( "$0" _DEBUG "$@" ) && _rc=$? || _rc=$?
 
   printf -- 'return code: %d\n' "$_rc" >> /var/log/lvm-flexvolume.log
 
