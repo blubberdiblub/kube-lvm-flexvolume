@@ -260,7 +260,7 @@ mountdevice() {
 
   fstype=$( json_get "$3" kubernetes.io/fsType )
 
-  if [ -z "$( blkid --match-tag TYPE --output value --no-encoding -- "$lv_dm_path" )" ] ; then
+  if [ -z "$( blkid -s TYPE -o value -d -- "$lv_dm_path" )" ] ; then
     if ! mkfs -t "$fstype" -- "$lv_dm_path" > /dev/null 2>&1 ; then
       reply_simple Failure message "Failed to create fs $fstype on device $lv_dm_path"
       exit 1
