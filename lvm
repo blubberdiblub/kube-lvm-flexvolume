@@ -125,40 +125,6 @@ init() {
   reply_json Success capabilities "$( printf '{}' | json_add_json attach true )" || fail_hard "init(): building reply failed"
 }
 
-getvolumename() {
-  [ $# -eq  1 ] || fail_hard "getvolumename(): takes exactly 1 argument"
-
-  volumegroup=$( json_get "$1" volumegroup )
-  thinpool=$( json_get_string "$1" thinpool )
-  volumeID=$( json_get "$1" volumeID )
-  size=$( json_get "$1" size )
-
-  if lv_report=$( lv_report 'lv_full_name="'"$volumegroup/$volumeID"'"' ) ; then
-    lv_uuid=$( json_get "$lv_report" lv_uuid )
-    reply_simple Success volumeName "$lv_uuid"
-    return 0
-  fi
-
-  if [ -z "$thinpool" ] ; then
-    lvcreate --name "$volumeID" --size "$size" -- "$volumegroup" > /dev/null 2>&1 && success=true || success=false
-  else
-    lvcreate --name "$volumeID" --virtualsize "$size" --thinpool "$thinpool" -- "$volumegroup" > /dev/null 2>&1 && success=true || success=false
-  fi
-
-  if ! $success ; then
-    reply_simple Failure message "Could not create $volumegroup/$volumeID"
-    exit 1
-  fi
-
-  if ! lv_report=$( lv_report 'lv_full_name="'"$volumegroup/$volumeID"'"' ) ; then
-    reply_simple Failure message "Could not query $volumegroup/$volumeID"
-    exit 1
-  fi
-
-  lv_uuid=$( json_get "$lv_report" lv_uuid )
-  reply_simple Success volumeName "$lv_uuid"
-}
-
 attach() {
   [ $# -eq  2 ] || fail_hard "attach(): takes exactly 2 arguments"
 
@@ -305,7 +271,6 @@ shift
 
 case "$op" in
 init)          init "$@"          ;;
-getvolumename) getvolumename "$@" ;;
 attach)        attach "$@"        ;;
 waitforattach) waitforattach "$@" ;;
 isattached)    isattached "$@"    ;;
