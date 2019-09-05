@@ -30,9 +30,20 @@ if [ "$1" != "_DEBUG" ] ; then
 
   printf -- '\n%s\n' "$_debug" >> /var/log/lvm-flexvolume.log
 
-  _debug=$( "$0" _DEBUG "$@" ) && _rc=$? || _rc=$?
+  _tmpstderr=$( mktemp --tmpdir flexvolume-lvm-XXXXXXXX ) || true
+  _debug=$( "$0" _DEBUG "$@" 2> "${_tmpstderr:-/dev/stdout}" ) && _rc=$? || _rc=$?
 
   printf -- 'return code: %d\n' "$_rc" >> /var/log/lvm-flexvolume.log
+
+  if [ -n "$_tmpstderr" ] ; then
+    _stderr=$( cat -- "$_tmpstderr" ) || true
+    rm -f -- "$_tmpstderr" || true
+
+    if [ -n "$_stderr" ] ; then
+      printf -- 'stderr:\n%s\n' "$_stderr" >> /var/log/lvm-flexvolume.log
+      printf -- '%s' "$_stderr" >&2
+    fi
+  fi
 
   if _temp=$( jq -n --argjson parse "$_debug" '$parse' 2> /dev/null ) ; then
     printf -- 'json result:\n%s\n' "$_temp" >> /var/log/lvm-flexvolume.log
