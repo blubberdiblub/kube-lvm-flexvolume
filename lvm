@@ -57,6 +57,9 @@ else
   shift
 fi
 
+# lvm pesters us with warnings that throw flexVolume off track, so suppress them
+export LVM_SUPPRESS_FD_WARNINGS=1
+
 fail_hard() {
   echo "$*" >&2
   exit 2
