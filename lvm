@@ -196,7 +196,7 @@ isattached() {
     return 0
   fi
 
-  if [ -z "$( json_get_string "$lv_report" lv_active_locally )" ] ; then
+  if [ -z "$( json_get_string "$lv_report" lv_active )" ] ; then
     reply_json Success attached false
     return 0
   fi
