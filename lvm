@@ -305,7 +305,7 @@ shift
 
 case "$op" in
 init)          init "$@"          ;;
-#getvolumename) getvolumename "$@" ;;
+getvolumename) getvolumename "$@" ;;
 attach)        attach "$@"        ;;
 waitforattach) waitforattach "$@" ;;
 isattached)    isattached "$@"    ;;
