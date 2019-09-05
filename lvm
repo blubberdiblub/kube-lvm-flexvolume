@@ -216,13 +216,6 @@ mountdevice() {
     exit 1
   fi
 
-  #lv_dm_path=$( json_get "$lv_report" lv_dm_path )
-  #if [ ! -b "$lv_dm_path" ] ; then
-  #  reply_simple Failure message "$lv_dm_path does not exist"
-  #  exit 1
-  #fi
-  lv_dm_path=$2
-
   if mountpoint -q -- "$1" ; then
     reply_status Success
     return 0
@@ -230,9 +223,9 @@ mountdevice() {
 
   fstype=$( json_get "$3" kubernetes.io/fsType )
 
-  if [ -z "$( blkid -s TYPE -o value -d -- "$lv_dm_path" )" ] ; then
-    if ! mkfs -t "$fstype" -- "$lv_dm_path" > /dev/null 2>&1 ; then
-      reply_simple Failure message "Failed to create fs $fstype on device $lv_dm_path"
+  if [ -z "$( blkid -s TYPE -o value -d -- "$2" )" ] ; then
+    if ! mkfs -t "$fstype" -- "$2" > /dev/null 2>&1 ; then
+      reply_simple Failure message "Failed to create fs $fstype on device $2"
       exit 1
     fi
   fi
@@ -244,8 +237,8 @@ mountdevice() {
 
   mountoptions=$( json_get_string "$3" mountoptions )
 
-  if ! mount -t "$fstype" ${mountoptions:+-o "$mountoptions"} -- "$lv_dm_path" "$1" > /dev/null 2>&1 ; then
-    reply_simple Failure message "Failed to mount device $lv_dm_path at $1"
+  if ! mount -t "$fstype" ${mountoptions:+-o "$mountoptions"} -- "$2" "$1" > /dev/null 2>&1 ; then
+    reply_simple Failure message "Failed to mount device $2 at $1"
     exit 1
   fi
 
