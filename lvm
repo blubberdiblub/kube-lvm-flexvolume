@@ -182,6 +182,14 @@ waitforattach() {
     exit 1
   fi
 
+  if [ -z "$( blkid -s TYPE -o value -d -- "$lv_dm_path" )" ] ; then
+    fstype=$( json_get_string "$2" kubernetes.io/fsType )
+    if ! mkfs -t "${fstype:-ext4}" -- "$lv_dm_path" > /dev/null 2>&1 ; then
+      reply_simple Failure message "Failed to create fs $fstype on device $lv_dm_path"
+      exit 1
+    fi
+  fi
+
   reply_simple Success device "$lv_dm_path"
 }
 
@@ -221,23 +229,15 @@ mountdevice() {
     return 0
   fi
 
-  fstype=$( json_get "$3" kubernetes.io/fsType )
-
-  if [ -z "$( blkid -s TYPE -o value -d -- "$2" )" ] ; then
-    if ! mkfs -t "$fstype" -- "$2" > /dev/null 2>&1 ; then
-      reply_simple Failure message "Failed to create fs $fstype on device $2"
-      exit 1
-    fi
-  fi
-
   if ! mkdir -p -- "$1" > /dev/null 2>&1 ; then
     reply_simple Failure message "Failed to make directory $1"
     exit 1
   fi
 
+  fstype=$( json_get_string "$3" kubernetes.io/fsType )
   mountoptions=$( json_get_string "$3" mountoptions )
 
-  if ! mount -t "$fstype" ${mountoptions:+-o "$mountoptions"} -- "$2" "$1" > /dev/null 2>&1 ; then
+  if ! mount ${fstype:+-t "$fstype"} ${mountoptions:+-o "$mountoptions"} -- "$2" "$1" > /dev/null 2>&1 ; then
     reply_simple Failure message "Failed to mount device $2 at $1"
     exit 1
   fi
