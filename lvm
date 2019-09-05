@@ -114,8 +114,12 @@ reply_json() {
 lv_report() {
   [ $# -eq 1 ] || fail_hard "lv_report(): takes exactly 1 argument"
 
-  lv_report=$( lvs --select "$1" -o lv_all --reportformat json ) || return 1
+  lv_report=$( lvs --select "$1" -o lv_all --reportformat json ) || fail_hard "lv_report(): lvs failed"
+  [ "$( jq -n --argjson parse "$lv_report" '$parse["report"] | length == 1' )" = "true" ] || fail_hard "lv_report(): report ill-structured"
+  lvs_matched=$( jq -n --argjson parse "$lv_report" '$parse["report"][]["lv"] | length' ) || fail_hard "lv_report(): report ill-structured"
+  [ "$lvs_matched" -le 1 ] || fail_hard "lv_report(): selection too broad"
 
+  [ "$lvs_matched" -eq 1 ] || return 1
   jq -n -c --argjson parse "$lv_report" '$parse["report"][]["lv"][]' || fail_hard "lv_report(): jq failed"
 }
 
